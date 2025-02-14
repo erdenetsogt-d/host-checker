@@ -17,20 +17,22 @@ FROM alpine:latest as release
 
 WORKDIR /app
 
-
-RUN mkdir ./messages 
-
-
 COPY --from=build /go/src/bot/main .
 COPY --from=build /go/src/bot/.env .
-COPY --from=build /go/src/bot/*.json .
+COPY --from=build /go/src/bot/mediamtx.yml .
+COPY --from=build /go/src/bot/dist ./dist
+
 
 RUN apk -U upgrade \
     && apk add --no-cache ca-certificates tzdata curl\
     && chmod +x /app/main 
+ENV PATH="/app:${PATH}"
+
 ENV TZ=Asia/Ulaanbaatar
+RUN curl -L https://github.com/bluenviron/mediamtx/releases/download/v1.11.3/mediamtx_v1.11.3_linux_amd64.tar.gz| tar xz -C /app
+COPY mediamtx.yml /app/mediamtx.yml
+RUN chmod +x /app/mediamtx  # Ensure MediaMTX is executable
 
-
-EXPOSE 3000
+EXPOSE 3000 8554 8000 8889
 
 ENTRYPOINT ["./main"]
