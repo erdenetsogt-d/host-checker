@@ -23,7 +23,7 @@ func CreateHost(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.Status(201).JSON(host)
+	return c.Status(200).JSON(host)
 }
 
 func GetHosts(c *fiber.Ctx) error {
@@ -104,6 +104,8 @@ func UpdateHost(c *fiber.Ctx) error {
 	host.NumOfRetry = updateHost.NumOfRetry
 	host.IsActive = updateHost.IsActive
 	host.ExpectedResponse = updateHost.ExpectedResponse
+	host.DeviceTypeName = updateHost.DevType
+	// host.DeviceTypeName = updateHost.DeviceType.DevType
 	// Update the existing host record
 	if err := db.Save(&host).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{

@@ -22,11 +22,12 @@ func SetupRoutes(app *fiber.App) {
 
 	// All these routes will require authentication
 	protected.Post("/hosts", handlers.CreateHost)
-	protected.Post("/controlStream", handlers.ControlStream)
-	protected.Get("/get-cameras", handlers.GetCamera)
+	// protected.Post("/controlStream", handlers.ControlStream)
+	// protected.Get("/get-cameras", handlers.GetCamera)
 	protected.Put("/hosts/:id", handlers.UpdateHost)
 	protected.Delete("/hosts/:id", handlers.DeleteHost)
 	protected.Get("/hosts", handlers.GetHosts)
+	protected.Get("/devtype", handlers.GetDevType)
 	protected.Get("/check-method", handlers.GetMethod)
 	protected.Get("/check-alert", handlers.GetAlert)
 	protected.Get("/host-history", handlers.GetHistory)

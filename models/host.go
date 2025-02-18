@@ -11,6 +11,11 @@ type CheckConfig struct {
 	ID     uint   `gorm:"primaryKey;autoIncrement"`
 	Method string `gorm:"unique;not null"` // Possible values: "ping", "http_get", "http_post"
 }
+type DeviceType struct {
+	gorm.Model
+
+	DevType string `json:"device_type" gorm:"type:varchar(255);unique;primaryKey"`
+}
 
 // Host table with reference to CheckConfig
 type Host struct {
@@ -30,7 +35,10 @@ type Host struct {
 	LastCheckedDate  time.Time    `json:"last_checked_date" gorm:"0000-00-00"`
 	AlertChannelName string       `json:"alert_channel_name"`
 	AlertChannel     AlertChannel `gorm:"foreignKey:AlertChannelName;references:Name"`
-	ExpectedResponse *int         `json:"expected_response"`
+	DeviceTypeName   string       `json:"device_type_name" gorm:"type:varchar(255)"`
+	DeviceType       DeviceType   `gorm:"foreignKey:DeviceTypeName;references:DevType"`
+
+	ExpectedResponse *int `json:"expected_response"`
 }
 type HostHistory struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
@@ -49,5 +57,6 @@ type UpdatedFields struct {
 	RetryCount       int    `json:"retry_count"`
 	NumOfRetry       int    `json:"num_of_retry"`
 	IsActive         bool   `json:"is_active"`
+	DevType          string `json:"device_type_name"`
 	ExpectedResponse *int   `json:"expected_response"`
 }

@@ -40,6 +40,7 @@ func ConnectDB() {
 		&models.SendTxt{},
 		&models.User{},
 		&models.Cameras{},
+		&models.DeviceType{},
 	)
 	if err != nil {
 		log.Fatalf("Migration failed: %v", err)
@@ -99,8 +100,10 @@ func createDefaultUser() {
 func createMethods() {
 	var methods []models.CheckConfig
 	var alertchannels []models.AlertChannel
+	var devtype []models.DeviceType
 	// Check if methods already exist in the table
 	result := DB.Find(&methods)
+	DB.Find(&devtype)
 	DB.Find(&alertchannels)
 	if result.Error != nil {
 		log.Printf("Error checking methods: %v", result.Error)
@@ -146,4 +149,28 @@ func createMethods() {
 		log.Println("Channels already exist in the table")
 
 	}
+
+	if len(devtype) == 0 {
+		defaultTypes := []models.DeviceType{
+			{DevType: "Switch"},
+			{DevType: "Camera"},
+			{DevType: "Host"},
+			{DevType: "Server"},
+			{DevType: "API"},
+		}
+		for _, types := range defaultTypes {
+			result := DB.Create(&types)
+			if result.Error != nil {
+				log.Printf("Error creating method '%s': %v", types.DevType, result.Error)
+			} else {
+				log.Printf("Method '%s' created successfully", types.DevType)
+			}
+
+		}
+
+	} else {
+		log.Println("Devtype already exist in the table")
+
+	}
+
 }
