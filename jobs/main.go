@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron"
@@ -86,11 +88,33 @@ func checkHostStatus(host *models.Host, db *gorm.DB) bool {
 		}()
 	case "http_get":
 		go func() {
-			resultChan <- !httpGetHost(host.IP, *host.ExpectedResponse)
+			headers, err := parseHeaders(host.HttpHeader)
+			if err != nil {
+				log.Printf("Error parsing headers for host %s: %v", host.Name, err)
+				resultChan <- false
+				return
+			}
+
+			success := httpGetHost(host.IP, headers, getExpectedResponse(host))
+			resultChan <- success
 		}()
 	case "http_post":
 		go func() {
-			resultChan <- !httpPostHost(host.IP)
+			var headers map[string]string
+			if host.HttpHeader != nil {
+				if err := json.Unmarshal([]byte(*host.HttpHeader), &headers); err != nil {
+					fmt.Println("Error parsing headers:", err)
+					resultChan <- false
+					return
+				}
+			}
+
+			var body string
+			if host.HttpBody != nil {
+				body = *host.HttpBody
+			}
+
+			resultChan <- !httpPostHost(host.IP, body, headers, *host.ExpectedResponse)
 		}()
 	default:
 		log.Printf("Unknown check method for host %s: %s", host.Name, checkMethod.Method)
@@ -116,31 +140,86 @@ func pingHost(ip string) bool {
 }
 
 // Performs an HTTP GET request and returns true if the host responds with 200
-func httpGetHost(url string, resp_code int) bool {
+func httpGetHost(url string, headers map[string]string, resp_code int) bool {
+	// Create HTTP client with timeout
 	client := &http.Client{
-		Timeout: 20 * time.Second, // Correct timeout value
+		Timeout: 20 * time.Second,
 	}
 
-	resp, err := client.Get(url)
+	// Create new request
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Println("Error creating request:", err)
 		return false
 	}
-	defer resp.Body.Close() // Close the response body after use
+
+	// Add custom headers
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	// Make the request
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error making request:", err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Read and print response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return false
+	}
 
 	fmt.Println("Status Code:", resp.StatusCode)
+	fmt.Println("Response Body:", string(respBody))
+	fmt.Println("Response Headers:", resp.Header)
+
 	return resp.StatusCode == resp_code
 }
 
 // Performs an HTTP POST request and returns true if the host responds with 200
-func httpPostHost(url string) bool {
-	resp, err := http.Post(url, "application/json", nil)
-	if err != nil || resp.StatusCode != 200 {
+func httpPostHost(url, body string, headers map[string]string, resp_code int) bool {
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+	}
+
+	// Create new request
+	req, err := http.NewRequest("POST", url, strings.NewReader(body))
+	if err != nil {
+		fmt.Println("Error creating request:", err)
 		return false
 	}
-	return true
-}
 
+	// Add custom headers
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	// Make the request
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error making request:", err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Read and print response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return false
+	}
+
+	fmt.Println("Status Code:", resp.StatusCode)
+	fmt.Println("Response Body:", string(respBody))
+	fmt.Println("Response Headers:", resp.Header)
+
+	return resp.StatusCode == resp_code
+}
 func handleHostDown(host *models.Host, db *gorm.DB) {
 	host.IsPending = true
 	host.RetryCount++
@@ -148,6 +227,7 @@ func handleHostDown(host *models.Host, db *gorm.DB) {
 
 	fmt.Printf("Host %s is down (Retry %d)\n", host.Name, host.RetryCount)
 
+	// Check if the host has reached the maximum retry count and is still down
 	if host.RetryCount >= host.NumOfRetry && !host.AlertStatus {
 		fmt.Printf("ALERT: %s is down!\n", host.Name)
 		host.AlertStatus = true
@@ -161,9 +241,22 @@ func handleHostDown(host *models.Host, db *gorm.DB) {
 func handleHostUp(host *models.Host, db *gorm.DB) {
 	host.LastCheckedDate = time.Now()
 	if host.AlertStatus {
+		// Calculate downtime in hours if the host was down before it was marked up
+		if host.LastAlert != "" {
+			fmt.Println("upp")
+			fmt.Println(host.LastAlert)
+			downDuration, err := timeSinceAlert(host.LastAlert)
+
+			if err == nil && downDuration > 0 {
+				fmt.Printf("Host %s was down for %.2f minutes\n", host.Name, downDuration)
+				// Optionally, store this information in the history or log it
+			}
+		}
 		host.IsPending = false
 		host.RetryCount = 0
 		host.AlertStatus = false
+		host.LastNormal = time.Now().Format("2006-01-02 15:04:05")
+
 		fmt.Printf("Host %s is back up\n", host.Name)
 		writeHostHistory(db, host, "up", false)
 	}
@@ -174,14 +267,63 @@ func handleHostUp(host *models.Host, db *gorm.DB) {
 	}
 	db.Save(host)
 }
+
+// Time since the last alert (in hours)
+func timeSinceAlert(lastAlert string) (float64, error) {
+	// Parse the LastAlert time
+	lastAlertTime, err := time.Parse("2006-01-02 15:04:05", lastAlert)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse last alert time: %v", err)
+	}
+
+	// Ensure the parsed time is in UTC
+	lastAlertTime = lastAlertTime.UTC()
+	fmt.Println("Last Alert Time ----", lastAlertTime)
+
+	// Get the current time in UTC
+	now := time.Now().UTC().Add(8 * time.Hour)
+	fmt.Println("Current Time ----", now)
+
+	// Calculate the duration between the current time and last alert time
+	duration := now.Sub(lastAlertTime).Minutes()
+
+	// Log the duration (in minutes)
+	fmt.Println("Duration (in minutes) ----", duration)
+
+	return duration, nil
+}
+
 func writeHostHistory(db *gorm.DB, host *models.Host, status string, alertStatus bool) {
 	history := models.HostHistory{
 		HostID:      host.ID,
 		HostName:    host.Name,
 		Status:      status,
 		CheckedAt:   time.Now(),
+		DeviceType:  host.DeviceTypeName,
 		AlertStatus: alertStatus,
 	}
+
+	// If the host was down, record the downtime in the history
+	if status == "down" && host.LastAlert != "" {
+		downDuration, err := timeSinceAlert(host.LastAlert)
+		if err == nil && downDuration > 0 {
+			history.DownDuration = downDuration // Store downtime duration in history
+		}
+	}
+
+	// If the host is up, calculate the down duration and save it
+	if status == "up" && host.AlertStatus {
+		// Calculate downtime if the host was previously down
+		if host.LastAlert != "" {
+			downDuration, err := timeSinceAlert(host.LastAlert)
+			if err == nil && downDuration > 0 {
+				history.DownDuration = downDuration // Store downtime duration in history
+			}
+		}
+		// Reset the host's alert status when it comes back up
+		host.AlertStatus = false
+	}
+
 	db.Create(&history)
 	sendAlert(host, alertStatus)
 }
@@ -253,4 +395,22 @@ func sendTelegramAlert(message, apiurl, tkn, chat_id string) error {
 	}
 
 	return nil
+}
+func parseHeaders(headerStr *string) (map[string]string, error) {
+	if headerStr == nil {
+		return make(map[string]string), nil
+	}
+
+	headers := make(map[string]string)
+	err := json.Unmarshal([]byte(*headerStr), &headers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse headers: %v", err)
+	}
+	return headers, nil
+}
+func getExpectedResponse(host *models.Host) int {
+	if host.ExpectedResponse == nil {
+		return http.StatusOK
+	}
+	return *host.ExpectedResponse
 }
